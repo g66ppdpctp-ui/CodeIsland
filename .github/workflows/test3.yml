@@ -1,0 +1,10 @@
+name: test3
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '13 */6 * * *'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test3
