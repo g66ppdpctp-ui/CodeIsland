@@ -1,8 +1,6 @@
 name: Sync upstream and build
 
 on:
-  schedule:
-    - cron: '13 */6 * * *'
   workflow_dispatch:
     inputs:
       force_build:
@@ -10,6 +8,8 @@ on:
         required: false
         default: false
         type: boolean
+  schedule:
+    - cron: '13 */6 * * *'
 
 permissions:
   contents: write
