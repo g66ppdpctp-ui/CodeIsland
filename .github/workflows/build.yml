@@ -1,0 +1,94 @@
+name: Build macOS ARM DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version written to the app bundle. Leave empty to use Info.plist.
+        required: false
+        type: string
+      sign_and_notarize:
+        description: Sign with Developer ID and notarize. Requires signing/notary secrets.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ARM64 DMG
+    runs-on: macos-15
+    env:
+      BUILD_ARCH: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ]; then
+            VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Building version $VERSION"
+
+      - name: Select Xcode 26
+        run: |
+          XCODE_APP="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -type d | sort | tail -n 1)"
+          if [ -z "$XCODE_APP" ]; then
+            echo "Xcode 26 is required to compile AppIcon.icon"
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+
+      - name: Show build environment
+        run: |
+          sw_vers
+          xcodebuild -version
+          uname -m
+
+      - name: Install DMG tooling
+        run: |
+          if ! command -v create-dmg >/dev/null 2>&1; then
+            brew install create-dmg
+          fi
+
+      - name: Configure unsigned build
+        if: ${{ !inputs.sign_and_notarize }}
+        run: |
+          echo "SKIP_SIGN=1" >> "$GITHUB_ENV"
+          echo "SKIP_NOTARIZE=1" >> "$GITHUB_ENV"
+
+      - name: Fix upstream entitlements (duplicate key)
+        run: |
+          python3 -c "
+import plistlib
+e=plistlib.load(open('CodeIsland.entitlements','rb'))
+seen=set()
+for k in list(e.keys()):
+  if k in seen: del e[k]
+  else: seen.add(k)
+plistlib.dump(e,open('CodeIsland.entitlements','wb'))
+"
+
+      - name: Build DMG
+        run: ./scripts/build-dmg.sh "$VERSION"
+
+      - name: Verify ARM64 binary
+        run: |
+          test "$(lipo -archs .build/dmg-staging/CodeIsland.app/Contents/MacOS/CodeIsland)" = "arm64"
+          codesign --verify --deep --strict --verbose=2 .build/dmg-staging/CodeIsland.app
+          ls -lh .build/CodeIsland.dmg
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeIsland-macos-arm64-dmg
+          path: .build/CodeIsland.dmg
+          if-no-files-found: error
