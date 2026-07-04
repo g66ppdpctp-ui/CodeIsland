@@ -1,0 +1,112 @@
+name: Auto-sync from upstream
+
+on:
+  schedule:
+    # Every 6 hours — check for new upstream releases
+    - cron: '13 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if already released'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get upstream latest release tag
+        id: upstream
+        run: |
+          # Public API — no token needed
+          LATEST=$(curl -sL https://api.github.com/repos/wxtsky/CodeIsland/releases/latest | jq -r .tag_name)
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "version=${LATEST#v}" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: $LATEST"
+
+      - name: Check if already built
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Force build — skipping existence check"
+          elif gh release view "${{ steps.upstream.outputs.tag }}" 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Already built: ${{ steps.upstream.outputs.tag }}"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "New upstream release: ${{ steps.upstream.outputs.tag }}"
+          fi
+
+      - name: Fetch upstream tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git remote add upstream https://github.com/wxtsky/CodeIsland.git
+          git fetch upstream tag "${{ steps.upstream.outputs.tag }}" --no-tags
+          git checkout tags/"${{ steps.upstream.outputs.tag }}"
+
+      - name: Select Xcode 26
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          XCODE_APP="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -type d | sort | tail -n 1)"
+          if [ -z "$XCODE_APP" ]; then
+            echo "Xcode 26 not found, trying Xcode 16+..."
+            XCODE_APP="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' -type d | sort | tail -n 1)"
+          fi
+          if [ -z "$XCODE_APP" ]; then
+            echo "No Xcode found!"
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install DMG tooling
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          if ! command -v create-dmg >/dev/null 2>&1; then
+            brew install create-dmg
+          fi
+
+      - name: Build DMG (unsigned)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          SKIP_SIGN=1 SKIP_NOTARIZE=1 BUILD_ARCH=arm64 \
+            ./scripts/build-dmg.sh "${{ steps.upstream.outputs.version }}"
+
+      - name: Verify ARM64 binary
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          test "$(lipo -archs .build/dmg-staging/CodeIsland.app/Contents/MacOS/CodeIsland)" = "arm64"
+          codesign --verify --deep --strict --verbose=2 .build/dmg-staging/CodeIsland.app || true
+          ls -lh .build/CodeIsland.dmg
+
+      - name: Compute SHA256
+        if: steps.check.outputs.exists == 'false'
+        id: sha
+        run: |
+          SHA=$(sha256sum .build/CodeIsland.dmg | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA"
+
+      - name: Create Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.upstream.outputs.tag }}" \
+            .build/CodeIsland.dmg \
+            --title "${{ steps.upstream.outputs.tag }}" \
+            --notes "Auto-built from [wxtsky/CodeIsland@${{ steps.upstream.outputs.tag }}](https://github.com/wxtsky/CodeIsland/releases/tag/${{ steps.upstream.outputs.tag }})  |  SHA256: \`${{ steps.sha.outputs.sha256 }}\`" \
+            --verify-tag
+
