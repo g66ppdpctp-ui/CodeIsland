@@ -4,7 +4,7 @@ on:
   schedule:
     # Every 6 hours — check for new upstream releases
     - cron: '13 */6 * * *'
-  workflow_dispatch:
+  workflow_dispatch:   # allow manual trigger
     inputs:
       force_build:
         description: 'Force rebuild even if already released'
