@@ -54,4 +54,4 @@ jobs:
             --repo ${{ github.repository }} \
             --title "${{ steps.upstream.outputs.tag }}" \
             --notes "SHA256: ${{ steps.sha.outputs.sha256 }}" \
-            --target "$(git rev-parse HEED)"
+            --target "$(git rev-parse HEAD)"
