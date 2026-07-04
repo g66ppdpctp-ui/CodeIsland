@@ -81,6 +81,10 @@ jobs:
       - name: Build DMG (unsigned)
         if: steps.check.outputs.exists == 'false'
         run: |
+          # Patch build-dmg.sh: upstream uses 'isolated deinit' (Swift 6 feature)
+          # which needs explicit opt-in on the runner's Xcode version
+          sed -i '' 's/swift build -c release --arch arm64/swift build -c release --arch arm64 -Xswiftc -enable-experimental-feature -Xswiftc IsolatedDeinit/' scripts/build-dmg.sh
+
           SKIP_SIGN=1 SKIP_NOTARIZE=1 BUILD_ARCH=arm64 \
             ./scripts/build-dmg.sh "${{ steps.upstream.outputs.version }}"
 
