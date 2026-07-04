@@ -49,19 +49,20 @@ jobs:
             echo "New upstream release: ${{ steps.upstream.outputs.tag }}"
           fi
 
-      - name: Fetch upstream tag
+      - name: Sync fork with upstream
         if: steps.check.outputs.exists == 'false'
         run: |
           git remote add upstream https://github.com/wxtsky/CodeIsland.git
-          git fetch upstream tag "${{ steps.upstream.outputs.tag }}" --no-tags
-          git checkout tags/"${{ steps.upstream.outputs.tag }}"
+          git fetch upstream main
+          git merge --ff-only upstream/main
+          echo "Fork synced to upstream/main ($(git rev-parse --short HEAD))"
 
       - name: Select Xcode 26
         if: steps.check.outputs.exists == 'false'
         run: |
           XCODE_APP="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' -type d | sort | tail -n 1)"
           if [ -z "$XCODE_APP" ]; then
-            echo "Xcode 26 not found, trying Xcode 16+..."
+            echo "Xcode 26 not found, trying other Xcode versions..."
             XCODE_APP="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' -type d | sort | tail -n 1)"
           fi
           if [ -z "$XCODE_APP" ]; then
@@ -81,10 +82,6 @@ jobs:
       - name: Build DMG (unsigned)
         if: steps.check.outputs.exists == 'false'
         run: |
-          # Patch build-dmg.sh: upstream uses 'isolated deinit' (Swift 6 feature)
-          # which needs explicit opt-in on the runner's Xcode version
-          sed -i '' 's/swift build -c release --arch arm64/swift build -c release --arch arm64 -Xswiftc -enable-experimental-feature -Xswiftc IsolatedDeinit/' scripts/build-dmg.sh
-
           SKIP_SIGN=1 SKIP_NOTARIZE=1 BUILD_ARCH=arm64 \
             ./scripts/build-dmg.sh "${{ steps.upstream.outputs.version }}"
 
@@ -111,6 +108,5 @@ jobs:
           gh release create "${{ steps.upstream.outputs.tag }}" \
             .build/CodeIsland.dmg \
             --title "${{ steps.upstream.outputs.tag }}" \
-            --notes "Auto-built from [wxtsky/CodeIsland@${{ steps.upstream.outputs.tag }}](https://github.com/wxtsky/CodeIsland/releases/tag/${{ steps.upstream.outputs.tag }})  |  SHA256: \`${{ steps.sha.outputs.sha256 }}\`" \
-            --verify-tag
-
+            --notes "Auto-built from [wxtsky/CodeIsland@${{ steps.upstream.outputs.tag }}](https://github.com/wxtsky/CodeIsland/releases/tag/${{ steps.upstream.outputs.tag }}) | SHA256: \`${{ steps.sha.outputs.sha256 }}\`" \
+            --target "$(git rev-parse HEAD)"
