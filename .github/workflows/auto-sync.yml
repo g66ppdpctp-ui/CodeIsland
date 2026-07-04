@@ -82,6 +82,23 @@ jobs:
       - name: Build DMG (unsigned)
         if: steps.check.outputs.exists == 'false'
         run: |
+          # Workaround: CodeIsland.entitlements has a duplicate key
+          # (com.apple.security.cs.disable-library-validation appears twice)
+          # that causes codesign to fail. Remove the duplicate.
+          cat CodeIsland.entitlements | \
+            python3 -c "
+import plistlib, sys
+data = plistlib.loads(sys.stdin.buffer.read())
+# Remove duplicate keys by deduplicating
+seen = {}
+for k in list(data.keys()):
+    if k in seen:
+        del data[k]
+    else:
+        seen[k] = True
+sys.stdout.buffer.write(plistlib.dumps(data))
+" > CodeIsland.entitlements.tmp && mv CodeIsland.entitlements.tmp CodeIsland.entitlements
+
           SKIP_SIGN=1 SKIP_NOTARIZE=1 BUILD_ARCH=arm64 \
             ./scripts/build-dmg.sh "${{ steps.upstream.outputs.version }}"
 
