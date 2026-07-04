@@ -1,0 +1,79 @@
+name: upstream-auto
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '13 */6 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: upstream
+        run: |
+          LATEST=$(curl -sL https://api.github.com/repos/wxtsky/CodeIsland/releases/latest | jq -r .tag_name)
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "version=${LATEST#v}" >> "$GITHUB_OUTPUT"
+
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${{ steps.upstream.outputs.tag }}
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          elif gh release view "$TAG" 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.exists == 'false'
+        run: |
+          git remote add upstream https://github.com/wxtsky/CodeIsland.git
+          git fetch upstream main
+          git merge --ff-only upstream/main
+
+      - if: steps.check.outputs.exists == 'false'
+        run: |
+          XCODE=$(find /Applications -maxdepth 1 -name 'Xcode_*.app' -type d | sort | tail -n 1)
+          [ -n "$XCODE" ] && sudo xcode-select -s "$XCODE/Contents/Developer" || true
+
+      - if: steps.check.outputs.exists == 'false'
+        run: command -v create-dmg >/dev/null 2>&1 || brew install create-dmg
+
+      - if: steps.check.outputs.exists == 'false'
+        run: |
+          python3 -c "
+import plistlib, sys
+e=plistlib.load(open(sys.argv[1],'rb'))
+seen=set()
+for k in list(e.keys()):
+  if k in seen: del e[k]
+  else: seen.add(k)
+plistlib.dump(e,open(sys.argv[1],'wb'))
+" CodeIsland.entitlements
+
+          SKIP_SIGN=1 SKIP_NOTARIZE=1 BUILD_ARCH=arm64 \
+            ./scripts/build-dmg.sh "${{ steps.upstream.outputs.version }}"
+
+      - if: steps.check.outputs.exists == 'false'
+        id: sha
+        run: echo "sha256=$(sha256sum .build/CodeIsland.dmg | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${{ steps.upstream.outputs.tag }}
+          gh release create "$TAG" .build/CodeIsland.dmg \
+            --title "$TAG" \
+            --notes "SHA256: ${{ steps.sha.outputs.sha256 }}" \
+            --target "$(git rev-parse HEAD)"
