@@ -166,26 +166,29 @@ APP_SIGNED=false
 find "$APP_DIR" -exec xattr -c {} + 2>/dev/null || true
 
 adhoc_sign_app_for_local_permissions() {
-    echo "==> Ad-hoc signing app with local entitlements"
+    echo "==> Ad-hoc signing app (no --options runtime to avoid Team ID mismatch)"
     SPARKLE_FW="$CONTENTS_DIR/Frameworks/Sparkle.framework"
     SPARKLE_B="$SPARKLE_FW/Versions/B"
 
     for xpc in "$SPARKLE_B"/XPCServices/*.xpc; do
         [ -e "$xpc" ] || continue
-        codesign --force --options runtime --sign - "$xpc"
+        codesign --force --sign - "$xpc"
     done
     [ -e "$SPARKLE_B/Autoupdate" ] && \
-        codesign --force --options runtime --sign - "$SPARKLE_B/Autoupdate"
+        codesign --force --sign - "$SPARKLE_B/Autoupdate"
     [ -d "$SPARKLE_B/Updater.app" ] && \
-        codesign --force --options runtime --sign - "$SPARKLE_B/Updater.app"
-    codesign --force --options runtime --sign - "$SPARKLE_FW"
+        codesign --force --sign - "$SPARKLE_B/Updater.app"
+    codesign --force --sign - "$SPARKLE_FW"
 
     for helper in "$CONTENTS_DIR"/Helpers/*; do
         [ -f "$helper" ] || continue
-        codesign --force --options runtime --sign - "$helper"
+        codesign --force --sign - "$helper"
     done
 
-    codesign --force --options runtime \
+    # Final deep sign ensures all nested binaries (including Sparkle inner
+    # binary) are consistently ad-hoc signed without --options runtime,
+    # which avoids Hardened Runtime Team ID mismatch on unsigned CI builds.
+    codesign --force --deep \
         --entitlements "$REPO_ROOT/CodeIsland.entitlements" \
         --sign - \
         "$APP_DIR"
